@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Controle de Repasse Médico</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>Controle de Repasse Médico</h1>
+      <p>Clínica: controle de valores recebidos na recepção e repasse ao médico.</p>
+    </header>
+
+    <section class="card">
+      <h2>Novo atendimento</h2>
+      <form id="registro-form" class="form-grid">
+        <label>Data
+          <input type="date" id="data" required>
+        </label>
+
+        <label>Paciente
+          <input type="text" id="paciente" placeholder="Nome do paciente" required>
+        </label>
+
+        <label>Médico
+          <input type="text" id="medico" placeholder="Nome do médico" required>
+        </label>
+
+        <label>Procedimento
+          <input type="text" id="procedimento" placeholder="Consulta, exame, retorno..." required>
+        </label>
+
+        <label>Forma de pagamento
+          <select id="forma-pagamento" required>
+            <option value="Pix">Pix</option>
+            <option value="Cartão">Cartão</option>
+            <option value="Dinheiro">Dinheiro</option>
+            <option value="Convênio">Convênio</option>
+          </select>
+        </label>
+
+        <label>Valor recebido na recepção (R$)
+          <input type="text" id="valor-recebido" inputmode="decimal" placeholder="0,00" required>
+        </label>
+
+        <label>Percentual do médico (%)
+          <input type="number" id="percentual-medico" min="0" max="100" step="0.01" value="60" required>
+        </label>
+
+        <label>Valor do repasse (R$)
+          <input type="text" id="valor-repasse" inputmode="decimal" placeholder="0,00" required>
+        </label>
+
+        <label>Status do repasse
+          <select id="status-repasse" required>
+            <option value="Pendente">Pendente</option>
+            <option value="Pago">Pago</option>
+            <option value="Parcial">Parcial</option>
+          </select>
+        </label>
+
+        <label class="full">Observações
+          <input type="text" id="observacoes" placeholder="Observações opcionais">
+        </label>
+
+        <div class="actions full">
+          <button type="submit" class="btn primary">Salvar atendimento</button>
+          <button type="button" id="limpar" class="btn">Limpar</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Repasse por atendimento</h2>
+      <div id="resumo" class="resumo"></div>
+
+      <div class="filtros">
+        <label>Filtrar por médico
+          <select id="filtro-medico">
+            <option value="Todos">Dr Simone</option>
+          </select>
+        </label>
+
+        <label>Filtrar por status
+          <select id="filtro-status">
+            <option value="Todos">Todos</option>
+            <option value="Pendente">Pendente</option>
+            <option value="Pago">Pago</option>
+            <option value="Parcial">Parcial</option>
+          </select>
+        </label>
+
+        <label>Buscar
+          <input type="text" id="filtro-busca" placeholder="Paciente, procedimento...">
+        </label>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Paciente</th>
+              <th>Médico</th>
+              <th>Procedimento</th>
+              <th>Recebido</th>
+              <th>% Médico</th>
+              <th>Repasse Médico</th>
+              <th>Clínica</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="lista-registros"></tbody>
+        </table>
+      </div>
+
+      <div class="actions">
+        <button type="button" id="exportar-csv" class="btn primary">Exportar CSV</button>
+        <button type="button" id="apagar-tudo" class="btn danger">Apagar tudo</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
