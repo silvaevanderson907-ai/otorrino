@@ -80,7 +80,7 @@
       <div class="filtros">
         <label>Filtrar por médico
           <select id="filtro-medico">
-            <option value="Todos">Dr Simone</option>
+            <option value="Todos">Todos</option>
           </select>
         </label>
 
@@ -96,6 +96,18 @@
         <label>Buscar
           <input type="text" id="filtro-busca" placeholder="Paciente, procedimento...">
         </label>
+
+        <label>Filtrar por data
+          <input type="date" id="filtro-data">
+        </label>
+
+        <label>Filtrar por mês
+          <input type="text" id="filtro-mes" placeholder="AAAA-MM" pattern="^\d{4}-\d{2}$" inputmode="numeric">
+        </label>
+
+        <div class="actions filtros-actions">
+          <button type="button" id="limpar-filtros" class="btn">Limpar filtros</button>
+        </div>
       </div>
 
       <div class="table-wrap">
@@ -120,6 +132,7 @@
 
       <div class="actions">
         <button type="button" id="exportar-csv" class="btn primary">Exportar CSV</button>
+        <button type="button" id="exportar-resumo-mensal" class="btn primary">Exportar Resumo Mensal</button>
         <button type="button" id="apagar-tudo" class="btn danger">Apagar tudo</button>
       </div>
     </section>

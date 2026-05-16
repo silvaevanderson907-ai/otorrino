@@ -1,5 +1,1326 @@
 (function () {
   const STORAGE_KEY = 'clinica-repasse-v1';
+  if (window.__repasseAppInitialized) {
+    return;
+  }
+  window.__repasseAppInitialized = true;
+  const DUPLICATE_WINDOW_MS = 10000;
+
+  const form = document.getElementById('registro-form');
+  const dataInput = document.getElementById('data');
+  const pacienteInput = document.getElementById('paciente');
+  const medicoInput = document.getElementById('medico');
+  const procedimentoInput = document.getElementById('procedimento');
+  const formaPagamentoInput = document.getElementById('forma-pagamento');
+  const valorRecebidoInput = document.getElementById('valor-recebido');
+  const percentualMedicoInput = document.getElementById('percentual-medico');
+  const valorRepasseInput = document.getElementById('valor-repasse');
+  const statusRepasseInput = document.getElementById('status-repasse');
+  const observacoesInput = document.getElementById('observacoes');
+  const limparBtn = document.getElementById('limpar');
+  const submitBtn = form.querySelector('button[type="submit"]');
+
+  const filtroMedico = document.getElementById('filtro-medico');
+  const filtroStatus = document.getElementById('filtro-status');
+  const filtroBusca = document.getElementById('filtro-busca');
+  const filtroData = document.getElementById('filtro-data');
+  const filtroMes = document.getElementById('filtro-mes');
+  const limparFiltrosBtn = document.getElementById('limpar-filtros');
+
+  const resumo = document.getElementById('resumo');
+  const listaRegistros = document.getElementById('lista-registros');
+
+  const exportarBtn = document.getElementById('exportar-csv');
+  const exportarResumoMensalBtn = document.getElementById('exportar-resumo-mensal');
+  const apagarTudoBtn = document.getElementById('apagar-tudo');
+
+  let isSubmitting = false;
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(arr)) return [];
+
+      const seen = new Set();
+      const deduped = [];
+      arr.forEach((item) => {
+        const key = [
+          item?.data || '',
+          normalizeText(item?.paciente || ''),
+          normalizeText(item?.medico || ''),
+          normalizeText(item?.procedimento || ''),
+          item?.formaPagamento || '',
+          Number(item?.valorRecebido || 0),
+          Number(item?.valorRepasse || 0),
+          item?.statusRepasse || ''
+        ].join('|');
+
+        if (!seen.has(key)) {
+          seen.add(key);
+          deduped.push(item);
+        }
+      });
+
+      if (deduped.length !== arr.length) {
+        save(deduped);
+      }
+
+      return deduped;
+    } catch {
+      return [];
+    }
+  }
+
+  function save(data) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
+
+  function parseMoneyBR(value) {
+    const s = String(value || '')
+      .trim()
+      .replace(/\s/g, '')
+      .replace(/\./g, '')
+      .replace(',', '.');
+    const n = Number.parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function formatMoneyBR(value) {
+    return Number(value || 0).toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+
+  function normalizeText(text) {
+    return String(text || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+  }
+
+  function escapeHTML(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function csvEscape(value) {
+    const text = String(value ?? '');
+    if (/[";\n]/.test(text)) {
+      return `"${text.replace(/"/g, '""')}"`;
+    }
+    return text;
+  }
+
+  function generateId(data) {
+    const max = data.reduce((acc, item) => {
+      const n = Number(String(item.id || '').replace(/^R/, ''));
+      return Number.isFinite(n) ? Math.max(acc, n) : acc;
+    }, 0);
+    return `R${String(max + 1).padStart(4, '0')}`;
+  }
+
+  function updateMedicoFilter(data) {
+    const current = filtroMedico.value;
+    const medicos = [...new Set(data.map((x) => x.medico).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    filtroMedico.innerHTML = '<option value="Todos">Todos</option>';
+
+    medicos.forEach((medico) => {
+      const option = document.createElement('option');
+      option.value = medico;
+      option.textContent = medico;
+      filtroMedico.appendChild(option);
+    });
+
+    if (medicos.includes(current)) {
+      filtroMedico.value = current;
+    }
+  }
+
+  function calcRepasseFromPercent() {
+    const recebido = parseMoneyBR(valorRecebidoInput.value);
+    const percentual = Number(percentualMedicoInput.value || 0);
+    const repasse = recebido * (percentual / 100);
+    valorRepasseInput.value = formatMoneyBR(repasse);
+  }
+
+  function calcPercentFromRepasse() {
+    const recebido = parseMoneyBR(valorRecebidoInput.value);
+    const repasse = parseMoneyBR(valorRepasseInput.value);
+    const percentual = recebido > 0 ? (repasse / recebido) * 100 : 0;
+    percentualMedicoInput.value = percentual.toFixed(2);
+  }
+
+  function getSortedData(data) {
+    return [...data].sort((a, b) => String(b.data).localeCompare(String(a.data)));
+  }
+
+  function getFilteredData() {
+    const all = load();
+    updateMedicoFilter(all);
+
+    const medicoFiltro = filtroMedico.value;
+    const statusFiltro = filtroStatus.value;
+    const busca = normalizeText(filtroBusca.value);
+    const dataFiltro = filtroData.value;
+    const mesFiltro = String(filtroMes.value || '').trim().slice(0, 7);
+
+    return all.filter((item) => {
+      if (medicoFiltro !== 'Todos' && item.medico !== medicoFiltro) {
+        return false;
+      }
+      if (statusFiltro !== 'Todos' && item.statusRepasse !== statusFiltro) {
+        return false;
+      }
+      if (dataFiltro && item.data !== dataFiltro) {
+        return false;
+      }
+      if (mesFiltro && !String(item.data || '').startsWith(mesFiltro)) {
+        return false;
+      }
+      if (!busca) {
+        return true;
+      }
+
+      const haystack = normalizeText([
+        item.paciente,
+        item.medico,
+        item.procedimento,
+        item.formaPagamento,
+        item.observacoes
+      ].join(' '));
+
+      return haystack.includes(busca);
+    });
+  }
+
+  function renderSummary(data) {
+    const recebidoTotal = data.reduce((acc, x) => acc + Number(x.valorRecebido || 0), 0);
+    const repasseTotal = data.reduce((acc, x) => acc + Number(x.valorRepasse || 0), 0);
+    const clinicaTotal = data.reduce((acc, x) => acc + Number(x.valorClinica || 0), 0);
+    const pendente = data.filter((x) => x.statusRepasse === 'Pendente').length;
+    const pago = data.filter((x) => x.statusRepasse === 'Pago').length;
+
+    resumo.innerHTML = [
+      `<span class="badge">Atendimentos: ${data.length}</span>`,
+      `<span class="badge">Recepção recebeu: R$ ${formatMoneyBR(recebidoTotal)}</span>`,
+      `<span class="badge">Repasse médico: R$ ${formatMoneyBR(repasseTotal)}</span>`,
+      `<span class="badge">Fica na clínica: R$ ${formatMoneyBR(clinicaTotal)}</span>`,
+      `<span class="badge">Pendentes: ${pendente}</span>`,
+      `<span class="badge">Pagos: ${pago}</span>`
+    ].join('');
+  }
+
+  function renderTable() {
+    const filtered = getSortedData(getFilteredData());
+
+    listaRegistros.innerHTML = '';
+
+    filtered.forEach((item) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHTML(item.data)}</td>
+        <td>${escapeHTML(item.paciente)}</td>
+        <td>${escapeHTML(item.medico)}</td>
+        <td>${escapeHTML(item.procedimento)}</td>
+        <td>R$ ${formatMoneyBR(item.valorRecebido)}</td>
+        <td>${Number(item.percentualMedico || 0).toFixed(2)}%</td>
+        <td>R$ ${formatMoneyBR(item.valorRepasse)}</td>
+        <td>R$ ${formatMoneyBR(item.valorClinica)}</td>
+        <td>${escapeHTML(item.statusRepasse)}</td>
+        <td><button class="btn-remove" data-remove="${escapeHTML(item.id)}">Remover</button></td>
+      `;
+      listaRegistros.appendChild(tr);
+    });
+
+    renderSummary(filtered);
+  }
+
+  function resetForm() {
+    form.reset();
+    dataInput.value = new Date().toISOString().slice(0, 10);
+    percentualMedicoInput.value = '60';
+    valorRecebidoInput.value = '0,00';
+    valorRepasseInput.value = '0,00';
+    statusRepasseInput.value = 'Pendente';
+  }
+
+  function resetFilters() {
+    filtroMedico.value = 'Todos';
+    filtroStatus.value = 'Todos';
+    filtroBusca.value = '';
+    filtroData.value = '';
+    filtroMes.value = '';
+    renderTable();
+  }
+
+  function isDuplicateCandidate(existing, incoming) {
+    if (!existing.createdAt) {
+      return false;
+    }
+
+    const closeInTime = Math.abs(Number(incoming.createdAt) - Number(existing.createdAt)) <= DUPLICATE_WINDOW_MS;
+    if (!closeInTime) {
+      return false;
+    }
+
+    return existing.data === incoming.data
+      && normalizeText(existing.paciente) === normalizeText(incoming.paciente)
+      && normalizeText(existing.medico) === normalizeText(incoming.medico)
+      && normalizeText(existing.procedimento) === normalizeText(incoming.procedimento)
+      && existing.formaPagamento === incoming.formaPagamento
+      && Number(existing.valorRecebido) === Number(incoming.valorRecebido)
+      && Number(existing.valorRepasse) === Number(incoming.valorRepasse)
+      && existing.statusRepasse === incoming.statusRepasse;
+  }
+
+  function exportCsvDetalhado() {
+    const filtered = getSortedData(getFilteredData());
+    const headers = [
+      'ID',
+      'Data',
+      'Paciente',
+      'Médico',
+      'Procedimento',
+      'Forma de pagamento',
+      'Valor recebido (R$)',
+      'Percentual médico (%)',
+      'Valor repasse (R$)',
+      'Valor clínica (R$)',
+      'Status repasse',
+      'Observações'
+    ];
+
+    const lines = [headers.join(';')];
+
+    filtered.forEach((item) => {
+      const row = [
+        item.id,
+        item.data,
+        item.paciente,
+        item.medico,
+        item.procedimento,
+        item.formaPagamento,
+        formatMoneyBR(item.valorRecebido),
+        Number(item.percentualMedico || 0).toFixed(2),
+        formatMoneyBR(item.valorRepasse),
+        formatMoneyBR(item.valorClinica),
+        item.statusRepasse,
+        item.observacoes
+      ].map(csvEscape);
+
+      lines.push(row.join(';'));
+    });
+
+    const csvContent = `\uFEFF${lines.join('\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'planilha_repasse_organizada.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportCsvResumoMensal() {
+    const filtered = getSortedData(getFilteredData());
+    const grouped = new Map();
+
+    filtered.forEach((item) => {
+      const mes = String(item.data || '').slice(0, 7);
+      const medico = item.medico || 'Sem médico';
+      const key = `${mes}::${medico}`;
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          mes,
+          medico,
+          atendimentos: 0,
+          recebido: 0,
+          repasse: 0,
+          clinica: 0,
+          pendentes: 0,
+          pagos: 0,
+          parciais: 0
+        });
+      }
+
+      const acc = grouped.get(key);
+      acc.atendimentos += 1;
+      acc.recebido += Number(item.valorRecebido || 0);
+      acc.repasse += Number(item.valorRepasse || 0);
+      acc.clinica += Number(item.valorClinica || 0);
+
+      if (item.statusRepasse === 'Pendente') acc.pendentes += 1;
+      if (item.statusRepasse === 'Pago') acc.pagos += 1;
+      if (item.statusRepasse === 'Parcial') acc.parciais += 1;
+    });
+
+    const headers = [
+      'Mês',
+      'Médico',
+      'Atendimentos',
+      'Total recebido (R$)',
+      'Total repasse médico (R$)',
+      'Total clínica (R$)',
+      'Pendentes',
+      'Pagos',
+      'Parciais'
+    ];
+
+    const lines = [headers.join(';')];
+
+    const rows = [...grouped.values()]
+      .sort((a, b) => (a.mes === b.mes ? a.medico.localeCompare(b.medico) : a.mes.localeCompare(b.mes)));
+
+    rows.forEach((row) => {
+      lines.push([
+        row.mes,
+        row.medico,
+        row.atendimentos,
+        formatMoneyBR(row.recebido),
+        formatMoneyBR(row.repasse),
+        formatMoneyBR(row.clinica),
+        row.pendentes,
+        row.pagos,
+        row.parciais
+      ].map(csvEscape).join(';'));
+    });
+
+    const csvContent = `\uFEFF${lines.join('\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'resumo_mensal_medico.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (isSubmitting) {
+      return;
+    }
+
+    isSubmitting = true;
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
+      const data = load();
+      const valorRecebido = parseMoneyBR(valorRecebidoInput.value);
+      const valorRepasse = parseMoneyBR(valorRepasseInput.value);
+      const percentualMedico = valorRecebido > 0
+        ? (valorRepasse / valorRecebido) * 100
+        : Number(percentualMedicoInput.value || 0);
+
+      const now = Date.now();
+      const registro = {
+        id: generateId(data),
+        data: dataInput.value,
+        paciente: pacienteInput.value.trim(),
+        medico: medicoInput.value.trim(),
+        procedimento: procedimentoInput.value.trim(),
+        formaPagamento: formaPagamentoInput.value,
+        valorRecebido,
+        percentualMedico,
+        valorRepasse,
+        valorClinica: Math.max(0, valorRecebido - valorRepasse),
+        statusRepasse: statusRepasseInput.value,
+        observacoes: observacoesInput.value.trim(),
+        createdAt: now
+      };
+
+      const alreadyExists = data.some((item) => isDuplicateCandidate(item, registro));
+      if (alreadyExists) {
+        window.alert('Esse atendimento acabou de ser salvo. Evitei duplicação automática.');
+        return;
+      }
+
+      data.push(registro);
+      save(data);
+      resetForm();
+      renderTable();
+    } finally {
+      setTimeout(() => {
+        isSubmitting = false;
+        if (submitBtn) submitBtn.disabled = false;
+      }, 350);
+    }
+  });
+
+  limparBtn.addEventListener('click', resetForm);
+  limparFiltrosBtn?.addEventListener('click', resetFilters);
+
+  listaRegistros.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-remove]');
+    if (!btn) {
+      return;
+    }
+
+    const id = btn.getAttribute('data-remove');
+    const updated = load().filter((item) => item.id !== id);
+    save(updated);
+    renderTable();
+  });
+
+  [filtroMedico, filtroStatus, filtroBusca, filtroData, filtroMes].forEach((element) => {
+    element?.addEventListener('change', renderTable);
+    element?.addEventListener('input', renderTable);
+  });
+
+  valorRecebidoInput.addEventListener('blur', () => {
+    valorRecebidoInput.value = formatMoneyBR(parseMoneyBR(valorRecebidoInput.value));
+    calcRepasseFromPercent();
+  });
+
+  percentualMedicoInput.addEventListener('input', calcRepasseFromPercent);
+
+  valorRepasseInput.addEventListener('blur', () => {
+    valorRepasseInput.value = formatMoneyBR(parseMoneyBR(valorRepasseInput.value));
+    calcPercentFromRepasse();
+  });
+
+  exportarBtn.addEventListener('click', exportCsvDetalhado);
+  exportarResumoMensalBtn?.addEventListener('click', exportCsvResumoMensal);
+
+  apagarTudoBtn.addEventListener('click', () => {
+    const ok = window.confirm('Deseja apagar todos os atendimentos?');
+    if (!ok) {
+      return;
+    }
+    save([]);
+    renderTable();
+  });
+
+  resetForm();
+  renderTable();
+})();/*(function () {
+  const STORAGE_KEY = 'clinica-repasse-v1';
+  const DUPLICATE_WINDOW_MS = 10000;
+
+  const form = document.getElementById('registro-form');
+  const dataInput = document.getElementById('data');
+  const pacienteInput = document.getElementById('paciente');
+  const medicoInput = document.getElementById('medico');
+  const procedimentoInput = document.getElementById('procedimento');
+  const formaPagamentoInput = document.getElementById('forma-pagamento');
+  const valorRecebidoInput = document.getElementById('valor-recebido');
+  const percentualMedicoInput = document.getElementById('percentual-medico');
+  const valorRepasseInput = document.getElementById('valor-repasse');
+  const statusRepasseInput = document.getElementById('status-repasse');
+  const observacoesInput = document.getElementById('observacoes');
+  const limparBtn = document.getElementById('limpar');
+  const submitBtn = form.querySelector('button[type="submit"]');
+
+  const filtroMedico = document.getElementById('filtro-medico');
+  const filtroStatus = document.getElementById('filtro-status');
+  const filtroBusca = document.getElementById('filtro-busca');
+  const filtroData = document.getElementById('filtro-data');
+  const filtroMes = document.getElementById('filtro-mes');
+  const limparFiltrosBtn = document.getElementById('limpar-filtros');
+
+  const resumo = document.getElementById('resumo');
+  const listaRegistros = document.getElementById('lista-registros');
+
+  const exportarBtn = document.getElementById('exportar-csv');
+  const exportarResumoMensalBtn = document.getElementById('exportar-resumo-mensal');
+  const apagarTudoBtn = document.getElementById('apagar-tudo');
+
+  let isSubmitting = false;
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function save(data) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
+
+  function parseMoneyBR(value) {
+    const s = String(value || '')
+      .trim()
+      .replace(/\s/g, '')
+      .replace(/\./g, '')
+      .replace(',', '.');
+    const n = Number.parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function formatMoneyBR(value) {
+    return Number(value || 0).toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+
+  function normalizeText(text) {
+    return String(text || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+  }
+
+  function escapeHTML(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function csvEscape(value) {
+    const text = String(value ?? '');
+    if (/[";\n]/.test(text)) {
+      return `"${text.replace(/"/g, '""')}"`;
+    }
+    return text;
+  }
+
+  function generateId(data) {
+    const max = data.reduce((acc, item) => {
+      const n = Number(String(item.id || '').replace(/^R/, ''));
+      return Number.isFinite(n) ? Math.max(acc, n) : acc;
+    }, 0);
+    return `R${String(max + 1).padStart(4, '0')}`;
+  }
+
+  function updateMedicoFilter(data) {
+    const current = filtroMedico.value;
+    const medicos = [...new Set(data.map((x) => x.medico).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    filtroMedico.innerHTML = '<option value="Todos">Todos</option>';
+
+    medicos.forEach((medico) => {
+      const option = document.createElement('option');
+      option.value = medico;
+      option.textContent = medico;
+      filtroMedico.appendChild(option);
+    });
+
+    if (medicos.includes(current)) {
+      filtroMedico.value = current;
+    }
+  }
+
+  function calcRepasseFromPercent() {
+    const recebido = parseMoneyBR(valorRecebidoInput.value);
+    const percentual = Number(percentualMedicoInput.value || 0);
+    const repasse = recebido * (percentual / 100);
+    valorRepasseInput.value = formatMoneyBR(repasse);
+  }
+
+  function calcPercentFromRepasse() {
+    const recebido = parseMoneyBR(valorRecebidoInput.value);
+    const repasse = parseMoneyBR(valorRepasseInput.value);
+    const percentual = recebido > 0 ? (repasse / recebido) * 100 : 0;
+    percentualMedicoInput.value = percentual.toFixed(2);
+  }
+
+  function getSortedData(data) {
+    return [...data].sort((a, b) => String(b.data).localeCompare(String(a.data)));
+  }
+
+  function getFilteredData() {
+    const all = load();
+    updateMedicoFilter(all);
+
+    const medicoFiltro = filtroMedico.value;
+    const statusFiltro = filtroStatus.value;
+    const busca = normalizeText(filtroBusca.value);
+    const dataFiltro = filtroData.value;
+    const mesFiltro = String(filtroMes.value || '').trim().slice(0, 7);
+
+    return all.filter((item) => {
+      if (medicoFiltro !== 'Todos' && item.medico !== medicoFiltro) {
+        return false;
+      }
+      if (statusFiltro !== 'Todos' && item.statusRepasse !== statusFiltro) {
+        return false;
+      }
+      if (dataFiltro && item.data !== dataFiltro) {
+        return false;
+      }
+      if (mesFiltro && !String(item.data || '').startsWith(mesFiltro)) {
+        return false;
+      }
+      if (!busca) {
+        return true;
+      }
+
+      const haystack = normalizeText([
+        item.paciente,
+        item.medico,
+        item.procedimento,
+        item.formaPagamento,
+        item.observacoes
+      ].join(' '));
+
+      return haystack.includes(busca);
+    });
+  }
+
+  function renderSummary(data) {
+    const recebidoTotal = data.reduce((acc, x) => acc + Number(x.valorRecebido || 0), 0);
+    const repasseTotal = data.reduce((acc, x) => acc + Number(x.valorRepasse || 0), 0);
+    const clinicaTotal = data.reduce((acc, x) => acc + Number(x.valorClinica || 0), 0);
+    const pendente = data.filter((x) => x.statusRepasse === 'Pendente').length;
+    const pago = data.filter((x) => x.statusRepasse === 'Pago').length;
+
+    resumo.innerHTML = [
+      `<span class="badge">Atendimentos: ${data.length}</span>`,
+      `<span class="badge">Recepção recebeu: R$ ${formatMoneyBR(recebidoTotal)}</span>`,
+      `<span class="badge">Repasse médico: R$ ${formatMoneyBR(repasseTotal)}</span>`,
+      `<span class="badge">Fica na clínica: R$ ${formatMoneyBR(clinicaTotal)}</span>`,
+      `<span class="badge">Pendentes: ${pendente}</span>`,
+      `<span class="badge">Pagos: ${pago}</span>`
+    ].join('');
+  }
+
+  function renderTable() {
+    const filtered = getSortedData(getFilteredData());
+
+    listaRegistros.innerHTML = '';
+
+    filtered.forEach((item) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHTML(item.data)}</td>
+        <td>${escapeHTML(item.paciente)}</td>
+        <td>${escapeHTML(item.medico)}</td>
+        <td>${escapeHTML(item.procedimento)}</td>
+        <td>R$ ${formatMoneyBR(item.valorRecebido)}</td>
+        <td>${Number(item.percentualMedico || 0).toFixed(2)}%</td>
+        <td>R$ ${formatMoneyBR(item.valorRepasse)}</td>
+        <td>R$ ${formatMoneyBR(item.valorClinica)}</td>
+        <td>${escapeHTML(item.statusRepasse)}</td>
+        <td><button class="btn-remove" data-remove="${escapeHTML(item.id)}">Remover</button></td>
+      `;
+      listaRegistros.appendChild(tr);
+    });
+
+    renderSummary(filtered);
+  }
+
+  function resetForm() {
+    form.reset();
+    dataInput.value = new Date().toISOString().slice(0, 10);
+    percentualMedicoInput.value = '60';
+    valorRecebidoInput.value = '0,00';
+    valorRepasseInput.value = '0,00';
+    statusRepasseInput.value = 'Pendente';
+  }
+
+  function resetFilters() {
+    filtroMedico.value = 'Todos';
+    filtroStatus.value = 'Todos';
+    filtroBusca.value = '';
+    filtroData.value = '';
+    filtroMes.value = '';
+    renderTable();
+  }
+
+  function isDuplicateCandidate(existing, incoming) {
+    if (!existing.createdAt) {
+      return false;
+    }
+
+    const closeInTime = Math.abs(Number(incoming.createdAt) - Number(existing.createdAt)) <= DUPLICATE_WINDOW_MS;
+    if (!closeInTime) {
+      return false;
+    }
+
+    return existing.data === incoming.data
+      && normalizeText(existing.paciente) === normalizeText(incoming.paciente)
+      && normalizeText(existing.medico) === normalizeText(incoming.medico)
+      && normalizeText(existing.procedimento) === normalizeText(incoming.procedimento)
+      && existing.formaPagamento === incoming.formaPagamento
+      && Number(existing.valorRecebido) === Number(incoming.valorRecebido)
+      && Number(existing.valorRepasse) === Number(incoming.valorRepasse)
+      && existing.statusRepasse === incoming.statusRepasse;
+  }
+
+  function exportCsvDetalhado() {
+    const filtered = getSortedData(getFilteredData());
+    const headers = [
+      'ID',
+      'Data',
+      'Paciente',
+      'Médico',
+      'Procedimento',
+      'Forma de pagamento',
+      'Valor recebido (R$)',
+      'Percentual médico (%)',
+      'Valor repasse (R$)',
+      'Valor clínica (R$)',
+      'Status repasse',
+      'Observações'
+    ];
+
+    const lines = [headers.join(';')];
+
+    filtered.forEach((item) => {
+      const row = [
+        item.id,
+        item.data,
+        item.paciente,
+        item.medico,
+        item.procedimento,
+        item.formaPagamento,
+        formatMoneyBR(item.valorRecebido),
+        Number(item.percentualMedico || 0).toFixed(2),
+        formatMoneyBR(item.valorRepasse),
+        formatMoneyBR(item.valorClinica),
+        item.statusRepasse,
+        item.observacoes
+      ].map(csvEscape);
+
+      lines.push(row.join(';'));
+    });
+
+    const csvContent = `\uFEFF${lines.join('\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'planilha_repasse_organizada.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportCsvResumoMensal() {
+    const filtered = getSortedData(getFilteredData());
+    const grouped = new Map();
+
+    filtered.forEach((item) => {
+      const mes = String(item.data || '').slice(0, 7);
+      const medico = item.medico || 'Sem médico';
+      const key = `${mes}::${medico}`;
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          mes,
+          medico,
+          atendimentos: 0,
+          recebido: 0,
+          repasse: 0,
+          clinica: 0,
+          pendentes: 0,
+          pagos: 0,
+          parciais: 0
+        });
+      }
+
+      const acc = grouped.get(key);
+      acc.atendimentos += 1;
+      acc.recebido += Number(item.valorRecebido || 0);
+      acc.repasse += Number(item.valorRepasse || 0);
+      acc.clinica += Number(item.valorClinica || 0);
+
+      if (item.statusRepasse === 'Pendente') acc.pendentes += 1;
+      if (item.statusRepasse === 'Pago') acc.pagos += 1;
+      if (item.statusRepasse === 'Parcial') acc.parciais += 1;
+    });
+
+    const headers = [
+      'Mês',
+      'Médico',
+      'Atendimentos',
+      'Total recebido (R$)',
+      'Total repasse médico (R$)',
+      'Total clínica (R$)',
+      'Pendentes',
+      'Pagos',
+      'Parciais'
+    ];
+
+    const lines = [headers.join(';')];
+
+    const rows = [...grouped.values()]
+      .sort((a, b) => (a.mes === b.mes ? a.medico.localeCompare(b.medico) : a.mes.localeCompare(b.mes)));
+
+    rows.forEach((row) => {
+      lines.push([
+        row.mes,
+        row.medico,
+        row.atendimentos,
+        formatMoneyBR(row.recebido),
+        formatMoneyBR(row.repasse),
+        formatMoneyBR(row.clinica),
+        row.pendentes,
+        row.pagos,
+        row.parciais
+      ].map(csvEscape).join(';'));
+    });
+
+    const csvContent = `\uFEFF${lines.join('\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'resumo_mensal_medico.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (isSubmitting) {
+      return;
+    }
+
+    isSubmitting = true;
+    submitBtn.disabled = true;
+
+    try {
+      const data = load();
+      const valorRecebido = parseMoneyBR(valorRecebidoInput.value);
+      const valorRepasse = parseMoneyBR(valorRepasseInput.value);
+      const percentualMedico = valorRecebido > 0
+        ? (valorRepasse / valorRecebido) * 100
+        : Number(percentualMedicoInput.value || 0);
+
+      const now = Date.now();
+      const registro = {
+        id: generateId(data),
+        data: dataInput.value,
+        paciente: pacienteInput.value.trim(),
+        medico: medicoInput.value.trim(),
+        procedimento: procedimentoInput.value.trim(),
+        formaPagamento: formaPagamentoInput.value,
+        valorRecebido,
+        percentualMedico,
+        valorRepasse,
+        valorClinica: Math.max(0, valorRecebido - valorRepasse),
+        statusRepasse: statusRepasseInput.value,
+        observacoes: observacoesInput.value.trim(),
+        createdAt: now
+      };
+
+      const alreadyExists = data.some((item) => isDuplicateCandidate(item, registro));
+      if (alreadyExists) {
+        window.alert('Esse atendimento acabou de ser salvo. Evitei duplicação automática.');
+        return;
+      }
+
+      data.push(registro);
+      save(data);
+      resetForm();
+      renderTable();
+    } finally {
+      setTimeout(() => {
+        isSubmitting = false;
+        submitBtn.disabled = false;
+      }, 350);
+    }
+  });
+
+  limparBtn.addEventListener('click', resetForm);
+  limparFiltrosBtn?.addEventListener('click', resetFilters);
+
+  listaRegistros.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-remove]');
+    if (!btn) {
+      return;
+    }
+
+    const id = btn.getAttribute('data-remove');
+    const updated = load().filter((item) => item.id !== id);
+    save(updated);
+    renderTable();
+  });
+
+  [filtroMedico, filtroStatus, filtroBusca, filtroData, filtroMes].forEach((element) => {
+    element?.addEventListener('change', renderTable);
+    element?.addEventListener('input', renderTable);
+  });
+
+  valorRecebidoInput.addEventListener('blur', () => {
+    valorRecebidoInput.value = formatMoneyBR(parseMoneyBR(valorRecebidoInput.value));
+    calcRepasseFromPercent();
+  });
+
+  percentualMedicoInput.addEventListener('input', calcRepasseFromPercent);
+
+  valorRepasseInput.addEventListener('blur', () => {
+    valorRepasseInput.value = formatMoneyBR(parseMoneyBR(valorRepasseInput.value));
+    calcPercentFromRepasse();
+  });
+
+  exportarBtn.addEventListener('click', exportCsvDetalhado);
+  exportarResumoMensalBtn?.addEventListener('click', exportCsvResumoMensal);
+
+  apagarTudoBtn.addEventListener('click', () => {
+    const ok = window.confirm('Deseja apagar todos os atendimentos?');
+    if (!ok) {
+      return;
+    }
+    save([]);
+    renderTable();
+  });
+
+  resetForm();
+  renderTable();
+})();(function () {
+  const STORAGE_KEY = 'clinica-repasse-v1';
+
+  const form = document.getElementById('registro-form');
+  const dataInput = document.getElementById('data');
+  const pacienteInput = document.getElementById('paciente');
+  const medicoInput = document.getElementById('medico');
+  const procedimentoInput = document.getElementById('procedimento');
+  const formaPagamentoInput = document.getElementById('forma-pagamento');
+  const valorRecebidoInput = document.getElementById('valor-recebido');
+  const percentualMedicoInput = document.getElementById('percentual-medico');
+  const valorRepasseInput = document.getElementById('valor-repasse');
+  const statusRepasseInput = document.getElementById('status-repasse');
+  const observacoesInput = document.getElementById('observacoes');
+  const limparBtn = document.getElementById('limpar');
+
+  const filtroMedico = document.getElementById('filtro-medico');
+  const filtroStatus = document.getElementById('filtro-status');
+  const filtroBusca = document.getElementById('filtro-busca');
+  const filtroData = document.getElementById('filtro-data');
+  const filtroMes = document.getElementById('filtro-mes');
+  const limparFiltrosBtn = document.getElementById('limpar-filtros');
+
+  const resumo = document.getElementById('resumo');
+  const listaRegistros = document.getElementById('lista-registros');
+
+  const exportarBtn = document.getElementById('exportar-csv');
+  const apagarTudoBtn = document.getElementById('apagar-tudo');
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function save(data) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
+
+  function parseMoneyBR(value) {
+    const s = String(value || '')
+      .trim()
+      .replace(/\s/g, '')
+      .replace(/\./g, '')
+      .replace(',', '.');
+    const n = Number.parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function formatMoneyBR(value) {
+    return Number(value || 0).toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+
+  function normalizeText(text) {
+    return String(text || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+  }
+
+  function escapeHTML(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function csvEscape(value) {
+    const text = String(value ?? '');
+    if (/[";\n]/.test(text)) {
+      return `"${text.replace(/"/g, '""')}"`;
+    }
+    return text;
+  }
+
+  function generateId(data) {
+    const max = data.reduce((acc, item) => {
+      const n = Number(String(item.id || '').replace(/^R/, ''));
+      return Number.isFinite(n) ? Math.max(acc, n) : acc;
+    }, 0);
+    return `R${String(max + 1).padStart(4, '0')}`;
+  }
+
+  function updateMedicoFilter(data) {
+    const current = filtroMedico.value;
+    const medicos = [...new Set(data.map((x) => x.medico).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    filtroMedico.innerHTML = '<option value="Todos">Todos</option>';
+
+    medicos.forEach((medico) => {
+      const option = document.createElement('option');
+      option.value = medico;
+      option.textContent = medico;
+      filtroMedico.appendChild(option);
+    });
+
+    if (medicos.includes(current)) {
+      filtroMedico.value = current;
+    }
+  }
+
+  function calcRepasseFromPercent() {
+    const recebido = parseMoneyBR(valorRecebidoInput.value);
+    const percentual = Number(percentualMedicoInput.value || 0);
+    const repasse = recebido * (percentual / 100);
+    valorRepasseInput.value = formatMoneyBR(repasse);
+  }
+
+  function calcPercentFromRepasse() {
+    const recebido = parseMoneyBR(valorRecebidoInput.value);
+    const repasse = parseMoneyBR(valorRepasseInput.value);
+    const percentual = recebido > 0 ? (repasse / recebido) * 100 : 0;
+    percentualMedicoInput.value = percentual.toFixed(2);
+  }
+
+  function getSortedData(data) {
+    return [...data].sort((a, b) => String(b.data).localeCompare(String(a.data)));
+  }
+
+  function getFilteredData() {
+    const all = load();
+    updateMedicoFilter(all);
+
+    const medicoFiltro = filtroMedico.value;
+    const statusFiltro = filtroStatus.value;
+    const busca = normalizeText(filtroBusca.value);
+    const dataFiltro = filtroData.value;
+    const mesFiltro = String(filtroMes.value || '').trim().slice(0, 7);
+
+    return all.filter((item) => {
+      if (medicoFiltro !== 'Todos' && item.medico !== medicoFiltro) {
+        return false;
+      }
+      if (statusFiltro !== 'Todos' && item.statusRepasse !== statusFiltro) {
+        return false;
+      }
+      if (dataFiltro && item.data !== dataFiltro) {
+        return false;
+      }
+      if (mesFiltro && !String(item.data || '').startsWith(mesFiltro)) {
+        return false;
+      }
+      if (!busca) {
+        return true;
+      }
+
+      const haystack = normalizeText([
+        item.paciente,
+        item.medico,
+        item.procedimento,
+        item.formaPagamento,
+        item.observacoes
+      ].join(' '));
+
+      return haystack.includes(busca);
+    });
+  }
+
+  function renderSummary(data) {
+    const recebidoTotal = data.reduce((acc, x) => acc + Number(x.valorRecebido || 0), 0);
+    const repasseTotal = data.reduce((acc, x) => acc + Number(x.valorRepasse || 0), 0);
+    const clinicaTotal = data.reduce((acc, x) => acc + Number(x.valorClinica || 0), 0);
+    const pendente = data.filter((x) => x.statusRepasse === 'Pendente').length;
+    const pago = data.filter((x) => x.statusRepasse === 'Pago').length;
+
+    resumo.innerHTML = [
+      `<span class="badge">Atendimentos: ${data.length}</span>`,
+      `<span class="badge">Recepção recebeu: R$ ${formatMoneyBR(recebidoTotal)}</span>`,
+      `<span class="badge">Repasse médico: R$ ${formatMoneyBR(repasseTotal)}</span>`,
+      `<span class="badge">Fica na clínica: R$ ${formatMoneyBR(clinicaTotal)}</span>`,
+      `<span class="badge">Pendentes: ${pendente}</span>`,
+      `<span class="badge">Pagos: ${pago}</span>`
+    ].join('');
+  }
+
+  function renderTable() {
+    const filtered = getSortedData(getFilteredData());
+
+    listaRegistros.innerHTML = '';
+
+    filtered.forEach((item) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHTML(item.data)}</td>
+        <td>${escapeHTML(item.paciente)}</td>
+        <td>${escapeHTML(item.medico)}</td>
+        <td>${escapeHTML(item.procedimento)}</td>
+        <td>R$ ${formatMoneyBR(item.valorRecebido)}</td>
+        <td>${Number(item.percentualMedico || 0).toFixed(2)}%</td>
+        <td>R$ ${formatMoneyBR(item.valorRepasse)}</td>
+        <td>R$ ${formatMoneyBR(item.valorClinica)}</td>
+        <td>${escapeHTML(item.statusRepasse)}</td>
+        <td><button class="btn-remove" data-remove="${escapeHTML(item.id)}">Remover</button></td>
+      `;
+      listaRegistros.appendChild(tr);
+    });
+
+    renderSummary(filtered);
+  }
+
+  function resetForm() {
+    form.reset();
+    dataInput.value = new Date().toISOString().slice(0, 10);
+    percentualMedicoInput.value = '60';
+    valorRecebidoInput.value = '0,00';
+    valorRepasseInput.value = '0,00';
+    statusRepasseInput.value = 'Pendente';
+  }
+
+  function resetFilters() {
+    filtroMedico.value = 'Todos';
+    filtroStatus.value = 'Todos';
+    filtroBusca.value = '';
+    filtroData.value = '';
+    filtroMes.value = '';
+    renderTable();
+  }
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+
+    const data = load();
+    const valorRecebido = parseMoneyBR(valorRecebidoInput.value);
+    const valorRepasse = parseMoneyBR(valorRepasseInput.value);
+    const percentualMedico = valorRecebido > 0
+      ? (valorRepasse / valorRecebido) * 100
+      : Number(percentualMedicoInput.value || 0);
+
+    const registro = {
+      id: generateId(data),
+      data: dataInput.value,
+      paciente: pacienteInput.value.trim(),
+      medico: medicoInput.value.trim(),
+      procedimento: procedimentoInput.value.trim(),
+      formaPagamento: formaPagamentoInput.value,
+      valorRecebido,
+      percentualMedico,
+      valorRepasse,
+      valorClinica: Math.max(0, valorRecebido - valorRepasse),
+      statusRepasse: statusRepasseInput.value,
+      observacoes: observacoesInput.value.trim()
+    };
+
+    data.push(registro);
+    save(data);
+    resetForm();
+    renderTable();
+  });
+
+  limparBtn.addEventListener('click', resetForm);
+
+  limparFiltrosBtn?.addEventListener('click', resetFilters);
+
+  listaRegistros.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-remove]');
+    if (!btn) {
+      return;
+    }
+
+    const id = btn.getAttribute('data-remove');
+    const updated = load().filter((item) => item.id !== id);
+    save(updated);
+    renderTable();
+  });
+
+  [filtroMedico, filtroStatus, filtroBusca, filtroData, filtroMes].forEach((element) => {
+    element?.addEventListener('change', renderTable);
+    element?.addEventListener('input', renderTable);
+  });
+
+  valorRecebidoInput.addEventListener('blur', () => {
+    valorRecebidoInput.value = formatMoneyBR(parseMoneyBR(valorRecebidoInput.value));
+    calcRepasseFromPercent();
+  });
+
+  percentualMedicoInput.addEventListener('input', calcRepasseFromPercent);
+
+  valorRepasseInput.addEventListener('blur', () => {
+    valorRepasseInput.value = formatMoneyBR(parseMoneyBR(valorRepasseInput.value));
+    calcPercentFromRepasse();
+  });
+
+  exportarBtn.addEventListener('click', () => {
+    const filtered = getSortedData(getFilteredData());
+    const headers = [
+      'ID',
+      'Data',
+      'Paciente',
+      'Médico',
+      'Procedimento',
+      'Forma de pagamento',
+      'Valor recebido (R$)',
+      'Percentual médico (%)',
+      'Valor repasse (R$)',
+      'Valor clínica (R$)',
+      'Status repasse',
+      'Observações'
+    ];
+
+    const lines = [headers.join(';')];
+
+    filtered.forEach((item) => {
+      const row = [
+        item.id,
+        item.data,
+        item.paciente,
+        item.medico,
+        item.procedimento,
+        item.formaPagamento,
+        formatMoneyBR(item.valorRecebido),
+        Number(item.percentualMedico || 0).toFixed(2),
+        formatMoneyBR(item.valorRepasse),
+        formatMoneyBR(item.valorClinica),
+        item.statusRepasse,
+        item.observacoes
+      ].map(csvEscape);
+
+      lines.push(row.join(';'));
+    });
+
+    const csvContent = `\uFEFF${lines.join('\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'planilha_repasse_organizada.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  });
+
+  apagarTudoBtn.addEventListener('click', () => {
+    const ok = window.confirm('Deseja apagar todos os atendimentos?');
+    if (!ok) {
+      return;
+    }
+    save([]);
+    renderTable();
+  });
+
+  resetForm();
+  renderTable();
+})();(function () {
+  const STORAGE_KEY = 'clinica-repasse-v1';
 
   const form = document.getElementById('registro-form');
   const dataInput = document.getElementById('data');
@@ -406,3 +1727,4 @@
   resetForm();
   render();
 })();
+*/
