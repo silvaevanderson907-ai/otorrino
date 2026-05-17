@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/png" href="img/81175.png">
-  <title>Controle de Repasse Médico</title>
+  <title>Controle de Repasse Clínica</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <main class="container">
     <header>
-      <h1>Controle de Repasse Médico</h1>
-      <p>Clínica: controle de valores recebidos na recepção e repasse ao médico.</p>
+      <h1>Controle de Repasse Clínica</h1>
+      <p>Clínica: controle de valores recebidos na recepção e repasse ao profissional.</p>
     </header>
 
     <section class="card">
@@ -25,7 +25,7 @@
           <input type="text" id="paciente" placeholder="Nome do paciente" required>
         </label>
 
-        <label>Médico
+        <label>Profissional
           <input type="text" id="medico" placeholder="Nome do médico" required>
         </label>
 
@@ -46,8 +46,8 @@
           <input type="text" id="valor-recebido" inputmode="decimal" placeholder="0,00" required>
         </label>
 
-        <label>Percentual do médico (%)
-          <input type="number" id="percentual-medico" min="0" max="100" step="0.01" value="60" required>
+        <label>Percentual do profissional (%)
+          <input type="number" id="percentual-profissional" min="0" max="100" step="0.01" value="60" required>
         </label>
 
         <label>Valor do repasse (R$)
@@ -78,7 +78,7 @@
       <div id="resumo" class="resumo"></div>
 
       <div class="filtros">
-        <label>Filtrar por médico
+        <label>Filtrar por profissional
           <select id="filtro-medico">
             <option value="Todos">Todos</option>
           </select>
